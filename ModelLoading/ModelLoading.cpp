@@ -169,9 +169,233 @@ const char* GaussianBlurShader = R"(
 		col += vec4(sampleTex[i] * kernel[i],0.0f);
 	}
 	col = vec4(col.rgb, 1.0f);
+
+	//Just grayscale
+	col = texture(textureApply, tex);
+	float average = 0.2126 * col.r + 0.7152 * col.g + 0.0722 * col.b;
+	//col = vec4(average,average,average,1.0f);
+
 	}
 )";
 
+const char* waterShaderVert = R"(
+	#version 330 core
+	layout (location = 0) in vec2 thisPos;
+	layout (location = 1) in vec2 one;
+	layout (location = 2) in vec2 two;
+
+	out vec3 normala;
+	out vec3 posOut;
+	uniform float time;
+	uniform mat4 model;
+	uniform mat4 view;
+	uniform mat4 projection;
+
+	void main()
+	{
+		float z = sin(time * sin((thisPos.x + thisPos.y))) / 10.0f;
+		float zOne = sin(time * sin((one.x + one.y))) / 10.0f;
+		float zTwo = sin(time * sin((two.x + two.y))) / 10.0f;
+		vec3 position = vec3(thisPos.x, thisPos.y, z);
+		vec3 crossed = cross(vec3(thisPos - one,zOne - z), vec3(thisPos - two,zTwo - z));
+		normala = normalize(mat3(transpose(inverse(model))) * -crossed);
+		posOut = position;
+		gl_Position = projection * view * model * vec4(position,1.0f);
+	}
+)";
+
+const char* waterShaderFrag = R"(
+	#version 330 core
+	out vec4 col;
+	in vec3 normala;
+	in vec3 posOut;
+	struct DirectionalLight
+	{
+		vec3 direction;
+		vec3 ambient;
+		vec3 diffuse;
+		vec3 specular;
+	};
+
+	uniform DirectionalLight directionalLight;
+	uniform mat4 model;
+	
+	uniform vec3 viewPos;
+
+	void main()
+	{
+		col = vec4(0.1,0.2,0.5,0.6f);
+		vec4 ambient = col * vec4(directionalLight.ambient, 0.6f);
+		vec4 diffuse = vec4(max(dot(normala, -normalize(directionalLight.direction)),0.0) * col);
+		vec3 reflected = normalize(reflect(-directionalLight.direction, normala));
+		vec4 specular = vec4(pow(max(dot(reflected, normalize(viewPos - vec3((model * vec4(posOut, 1.0)).xyz))), 0.0), 256) * col);
+		col = ambient + diffuse + specular;
+	}
+)";
+
+struct WaterTriData
+{
+	float thisX;
+	float thisY;
+
+	float oneX;
+	float oneY;
+
+	float twoX;
+	float twoY;
+};
+
+
+class WaterBody : public Drawable
+{
+public:
+	WaterBody(float width, float height, int nrPerAxis = 10);
+	void draw(Window& win, Shader& shader) override;
+	void setRotation(const glm::fquat& rot) { rotation = rot; }
+	void setScale(const glm::vec3& scale) { this->scale = scale; }
+	void setPosition(glm::vec3 position) { this->position = position; }
+	glm::fquat getRotation() const { return rotation; }
+private:
+	std::vector<WaterTriData> getVertices(float width, float height, int nrPerAxis = 10);
+	unsigned int VAO;
+	unsigned int VBO;
+
+	glm::vec3 position = glm::vec3(0, 0, 0);
+	glm::vec3 scale = glm::vec3(1, 1, 1);
+	glm::fquat rotation = glm::fquat(1, 0, 0, 0);
+
+	int verticesNum = 0;
+};
+
+#include <glm/gtx/quaternion.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+void WaterBody::draw(Window& window, Shader& shader)
+{
+	shader.use();
+
+	glm::mat4 projection = window.getProjection();
+	glm::mat4 view = window.getView();
+
+	glm::mat4 translationn = glm::translate(glm::mat4(1.0f), position);
+	glm::mat4 scalee = glm::scale(glm::mat4(1.0f), scale);
+	glm::mat4 rotationn = glm::toMat4(rotation);
+
+	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "view"), 1, GL_FALSE, glm::value_ptr(view));
+	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "model"), 1, GL_FALSE, glm::value_ptr(translationn * rotationn * scalee));
+	glUniform3f(glGetUniformLocation(shader.getID(), "viewPos"), window.getCameraPosition().x, window.getCameraPosition().y, window.getCameraPosition().z);
+
+	//setting a static directional light for now
+
+	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.direction"), sin(1.5f), -2, cos(1.5f));
+	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.ambient"), 0.2f, 0.2f, 0.2f);
+	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.diffuse"), 0.5f, 0.5f, 0.5f);
+	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.specular"), 1, 1, 1);
+
+	glUniform1f(glGetUniformLocation(shader.getID(), "time"), glfwGetTime());
+	glBindVertexArray(VAO);
+	glDrawArrays(GL_TRIANGLES, 0, verticesNum);
+}
+
+WaterBody::WaterBody(float width, float height, int nrPerAxis)
+{
+
+	std::vector<WaterTriData> vertices = getVertices(width, height, nrPerAxis);
+	verticesNum = vertices.size();
+
+	glGenVertexArrays(1, &VAO);
+	glBindVertexArray(VAO);
+	glGenBuffers(1, &VBO);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(VertexData) * vertices.size(), vertices.data(), GL_STATIC_DRAW);
+	
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(WaterTriData), (void*)0);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(WaterTriData), (void*)(sizeof(float) * 2));
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(WaterTriData), (void*)(sizeof(float) * 4));
+
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	glEnableVertexAttribArray(2);
+}
+
+std::vector<WaterTriData> WaterBody::getVertices(float width, float height, int nrPerAxis)
+{
+	std::vector<WaterTriData> vertices;
+	float xStep = width / nrPerAxis;
+	float yStep = height / nrPerAxis;
+	for (int i = 0; i < nrPerAxis; ++i)
+		for (int j = 0; j < nrPerAxis; ++j)
+		{
+			WaterTriData vertex1;
+			vertex1.thisX = -width / 2 + i * xStep;
+			vertex1.thisY = -height / 2 + j * yStep;
+
+			vertex1.oneX = -width / 2 + i * xStep + xStep;
+			vertex1.oneY = -height / 2 + j * yStep;
+
+			vertex1.twoX = -width / 2 + i * xStep + xStep;
+			vertex1.twoY = -height / 2 + j * yStep + yStep;
+
+			WaterTriData vertex2;
+			vertex2.twoX = -width / 2 + i * xStep;
+			vertex2.twoY = -height / 2 + j * yStep;
+
+			vertex2.thisX = -width / 2 + i * xStep + xStep;
+			vertex2.thisY = -height / 2 + j * yStep;
+
+			vertex2.oneX = -width / 2 + i * xStep + xStep;
+			vertex2.oneY = -height / 2 + j * yStep + yStep;
+
+			WaterTriData vertex3;
+			vertex3.oneX = -width / 2 + i * xStep;
+			vertex3.oneY = -height / 2 + j * yStep;
+
+			vertex3.twoX = -width / 2 + i * xStep + xStep;
+			vertex3.twoY = -height / 2 + j * yStep;
+
+			vertex3.thisX = -width / 2 + i * xStep + xStep;
+			vertex3.thisY = -height / 2 + j * yStep + yStep;
+
+			WaterTriData vertex21;
+			vertex21.thisX = -width / 2 + i * xStep;
+			vertex21.thisY = -height / 2 + j * yStep;
+
+			vertex21.oneX = -width / 2 + i * xStep + xStep;
+			vertex21.oneY = -height / 2 + j * yStep + yStep;
+
+			vertex21.twoX = -width / 2 + i * xStep;
+			vertex21.twoY = -height / 2 + j * yStep + yStep;
+
+			WaterTriData vertex22;
+			vertex22.twoX = -width / 2 + i * xStep;
+			vertex22.twoY = -height / 2 + j * yStep;
+
+			vertex22.thisX = -width / 2 + i * xStep + xStep;
+			vertex22.thisY = -height / 2 + j * yStep + yStep;
+
+			vertex22.oneX = -width / 2 + i * xStep;
+			vertex22.oneY = -height / 2 + j * yStep + yStep;
+
+			WaterTriData vertex23;
+			vertex23.oneX = -width / 2 + i * xStep;
+			vertex23.oneY = -height / 2 + j * yStep;
+
+			vertex23.twoX = -width / 2 + i * xStep + xStep;
+			vertex23.twoY = -height / 2 + j * yStep + yStep;
+
+			vertex23.thisX = -width / 2 + i * xStep;
+			vertex23.thisY = -height / 2 + j * yStep + yStep;
+
+			vertices.push_back(vertex1);
+			vertices.push_back(vertex2);
+			vertices.push_back(vertex3);
+			vertices.push_back(vertex21);
+			vertices.push_back(vertex22);
+			vertices.push_back(vertex23);
+		}
+	return vertices;
+}
 
 class FrameBuffer
 {
@@ -245,12 +469,17 @@ int main()
 	Shader shader2(outlineShaderSVert, outlineShader);
 	Shader spriteShaderProg(spriteShader, spriteFragShader);
 	Shader postProcess(spriteShader, GaussianBlurShader);
+	Shader waterShader(waterShaderVert, waterShaderFrag);
 	Model model("backpack.obj");
 	Sprite sprite("window.png");
+	WaterBody water(2, 2, 10);
+	water.setPosition(glm::vec3(0, -0.5f, 0));
+	water.setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)) * water.getRotation());
 	FrameBuffer frameBuffer(0, 0, 800, 600, true);
 	Sprite renderedToScreen(frameBuffer.getTexture());
 	model.setScale(glm::vec3(0.2f, 0.2f, 0.2f));
 	model.setPosition(glm::vec3(0, 0, -1));
+	water.setScale(glm::vec3(5, 5, 1));
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	while (!window.shouldClose())
 	{
@@ -261,14 +490,18 @@ int main()
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 		window.setProjection(glm::perspective(45.0f, (float)800 / 600, 0.1f, 100.0f));
-		window.setView(glm::lookAt(glm::vec3(2 * sin(glfwGetTime() * 0.2f), 0, 2 * cos(glfwGetTime() * 0.2f)), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
+		window.setView(glm::lookAt(glm::vec3(2 * sin(glfwGetTime() * 0.2f), 1, 2 * cos(glfwGetTime() * 0.2f)), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
 		window.draw(model, shader);
 		glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 		window.draw(model, shader2);
+		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 
 		window.disableFaceCulling();
-		window.draw(sprite, spriteShaderProg);
+		//window.draw(sprite, spriteShaderProg);
+
+		window.draw(water, waterShader);
+
 		frameBuffer.reset(800, 600);
 
 		window.setProjection(glm::ortho(-0.5f,0.5f,-0.5f,0.5f,0.01f,100.0f));

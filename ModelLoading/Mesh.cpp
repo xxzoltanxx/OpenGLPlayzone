@@ -37,7 +37,7 @@ void Mesh::draw(Window& window, Shader& shader)
 
 	//setting a static directional light for now
 
-	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.direction"), sin(glfwGetTime() * 1.5f), 0 , cos(glfwGetTime() * 1.5f));
+	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.direction"), sin(glfwGetTime() * 1.5f), -2 , cos(glfwGetTime() * 1.5f));
 	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.ambient"), 0.2f, 0.2f, 0.2f);
 	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.diffuse"), 0.5f, 0.5f, 0.5f);
 	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.specular"), 1, 1, 1);
