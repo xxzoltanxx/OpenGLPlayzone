@@ -193,9 +193,9 @@ const char* waterShaderVert = R"(
 
 	void main()
 	{
-		float z = sin(time * sin((thisPos.x + thisPos.y))) / 5.0f;
-		float zOne = sin(time * sin((one.x + one.y))) / 5.0f;
-		float zTwo = sin(time * sin((two.x + two.y))) / 5.0f;
+		float z = sin(time * ((thisPos.x + thisPos.y))) / 5.0f;
+		float zOne = sin(time * ((one.x + one.y))) / 5.0f;
+		float zTwo = sin(time * ((two.x + two.y))) / 5.0f;
 		vec3 position = vec3(thisPos.x, thisPos.y, z);
 		vec3 crossed = cross(vec3(one - thisPos,zOne - z), vec3(two - thisPos,zTwo - z));
 		normala = normalize(mat3(transpose(inverse(model))) * -crossed);
@@ -219,17 +219,43 @@ const char* waterShaderFrag = R"(
 
 	uniform DirectionalLight directionalLight;
 	uniform mat4 model;
-	
+	uniform samplerCube cubeMap;
 	uniform vec3 viewPos;
 
 	void main()
 	{
-		col = vec4(0.1,0.5,0.5,1.0f);
+		col = mix(vec4(0.1,0.5,0.5,1.0f),texture(cubeMap, reflect(normalize(viewPos - vec3(model * vec4(posOut, 1.0))), normala)), 0.7f);
 		vec4 ambient = col * vec4(directionalLight.ambient, 1.0f);
 		vec4 diffuse = vec4(max(dot(normala, -normalize(directionalLight.direction)),0.0) * col);
 		vec3 reflected = normalize(reflect(-directionalLight.direction, normala));
 		vec4 specular = vec4(pow(max(dot(reflected, normalize(viewPos - vec3((model * vec4(posOut, 1.0)).xyz))), 0.0), 32) * col);
 		col = ambient + diffuse + specular;
+	}
+)";
+
+const char* cubemapVertS = R"(
+	#version 330 core
+	layout (location = 0) in vec3 pos;
+	uniform mat4 projection;
+	uniform mat4 view;
+	
+	out vec3 TexCoord;
+	void main()
+	{
+		TexCoord = pos;
+		vec4 ayy = projection * mat4(mat3(view)) * vec4(pos,1.0f);
+		gl_Position = ayy.xyww;
+	}
+)";
+
+const char* cubemapFragS = R"(
+	#version 330 core
+	in vec3 TexCoord;
+	uniform samplerCube skybox;
+	out vec4 col;
+	void main()
+	{
+		col = texture(skybox, TexCoord);
 	}
 )";
 
@@ -245,11 +271,24 @@ struct WaterTriData
 	float twoY;
 };
 
+class SkyBox : public Drawable
+{
+public:
+	SkyBox(const std::vector<std::string>& faces);
+	void draw(Window& window, Shader& shader) override;
+	int getTexture() const { return texture; }
+private:
+	unsigned int VBO;
+	unsigned int VAO;
+	unsigned int texture;
+
+	static float vertices[];
+};
 
 class WaterBody : public Drawable
 {
 public:
-	WaterBody(float width, float height, int nrPerAxis = 10);
+	WaterBody(float width, float height, int nrPerAxis, SkyBox& box);
 	void draw(Window& win, Shader& shader) override;
 	void setRotation(const glm::fquat& rot) { rotation = rot; }
 	void setScale(const glm::vec3& scale) { this->scale = scale; }
@@ -259,6 +298,7 @@ private:
 	std::vector<WaterTriData> getVertices(float width, float height, int nrPerAxis = 10);
 	unsigned int VAO;
 	unsigned int VBO;
+	unsigned int skyboxTexture;
 
 	glm::vec3 position = glm::vec3(0, 0, 0);
 	glm::vec3 scale = glm::vec3(1, 1, 1);
@@ -286,7 +326,11 @@ void WaterBody::draw(Window& window, Shader& shader)
 	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "model"), 1, GL_FALSE, glm::value_ptr(translationn * rotationn * scalee));
 	glUniform3f(glGetUniformLocation(shader.getID(), "viewPos"), window.getCameraPosition().x, window.getCameraPosition().y, window.getCameraPosition().z);
 
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, skyboxTexture);
 	//setting a static directional light for now
+
+	glUniform1i(glGetUniformLocation(shader.getID(), "cubeMap"), 1);
 
 	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.direction"), sin(1.5f), -2, cos(1.5f));
 	glUniform3f(glGetUniformLocation(shader.getID(), "directionalLight.ambient"), 0.2f, 0.2f, 0.2f);
@@ -298,9 +342,9 @@ void WaterBody::draw(Window& window, Shader& shader)
 	glDrawArrays(GL_TRIANGLES, 0, verticesNum);
 }
 
-WaterBody::WaterBody(float width, float height, int nrPerAxis)
+WaterBody::WaterBody(float width, float height, int nrPerAxis, SkyBox& skyboxTexture)
 {
-
+	this->skyboxTexture = skyboxTexture.getTexture();
 	std::vector<WaterTriData> vertices = getVertices(width, height, nrPerAxis);
 	verticesNum = vertices.size();
 
@@ -462,6 +506,92 @@ void FrameBuffer::reset(int width, int height) const
 	glViewport(0, 0, width, height);
 }
 
+#include "stb_image.h"
+
+float SkyBox::vertices[] = { -1.0f,  1.0f, -1.0f,
+	-1.0f, -1.0f, -1.0f,
+	 1.0f, -1.0f, -1.0f,
+	 1.0f, -1.0f, -1.0f,
+	 1.0f,  1.0f, -1.0f,
+	-1.0f,  1.0f, -1.0f,
+
+	-1.0f, -1.0f,  1.0f,
+	-1.0f, -1.0f, -1.0f,
+	-1.0f,  1.0f, -1.0f,
+	-1.0f,  1.0f, -1.0f,
+	-1.0f,  1.0f,  1.0f,
+	-1.0f, -1.0f,  1.0f,
+
+	 1.0f, -1.0f, -1.0f,
+	 1.0f, -1.0f,  1.0f,
+	 1.0f,  1.0f,  1.0f,
+	 1.0f,  1.0f,  1.0f,
+	 1.0f,  1.0f, -1.0f,
+	 1.0f, -1.0f, -1.0f,
+
+	-1.0f, -1.0f,  1.0f,
+	-1.0f,  1.0f,  1.0f,
+	 1.0f,  1.0f,  1.0f,
+	 1.0f,  1.0f,  1.0f,
+	 1.0f, -1.0f,  1.0f,
+	-1.0f, -1.0f,  1.0f,
+
+	-1.0f,  1.0f, -1.0f,
+	 1.0f,  1.0f, -1.0f,
+	 1.0f,  1.0f,  1.0f,
+	 1.0f,  1.0f,  1.0f,
+	-1.0f,  1.0f,  1.0f,
+	-1.0f,  1.0f, -1.0f,
+
+	-1.0f, -1.0f, -1.0f,
+	-1.0f, -1.0f,  1.0f,
+	 1.0f, -1.0f, -1.0f,
+	 1.0f, -1.0f, -1.0f,
+	-1.0f, -1.0f,  1.0f,
+	 1.0f, -1.0f,  1.0f
+};
+
+void SkyBox::draw(Window& window, Shader& shader)
+{
+	shader.use();
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
+	glBindVertexArray(VAO);
+	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "projection"), 1, GL_FALSE, glm::value_ptr(window.getProjection()));
+	glUniformMatrix4fv(glGetUniformLocation(shader.getID(), "view"), 1, GL_FALSE, glm::value_ptr(window.getView()));
+
+	glDrawArrays(GL_TRIANGLES, 0, sizeof(vertices) / sizeof(float));
+}
+
+SkyBox::SkyBox(const std::vector<std::string>& faces)
+{
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
+
+	for (int i = 0; i < faces.size(); ++i)
+	{
+		int width, height, channels;
+		unsigned char* data = stbi_load(faces[i].c_str(), &width, &height, &channels, 0);
+
+		glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGB, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		stbi_image_free(data);
+	}
+
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glGenVertexArrays(1, &VAO);
+	glBindVertexArray(VAO);
+	glGenBuffers(1, &VBO);
+	glBindBuffer(GL_ARRAY_BUFFER, VBO);
+	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+}
+
 int main()
 {
 	Window window(800, 600, "OPENGL");
@@ -470,16 +600,18 @@ int main()
 	Shader spriteShaderProg(spriteShader, spriteFragShader);
 	Shader postProcess(spriteShader, GaussianBlurShader);
 	Shader waterShader(waterShaderVert, waterShaderFrag);
+	Shader skyboxShader(cubemapVertS, cubemapFragS);
+	SkyBox skay(std::vector<std::string>{"right.png", "left.png", "top.png", "bottom.png", "front.png", "back.png"});
 	Model model("backpack.obj");
 	Sprite sprite("window.png");
-	WaterBody water(2, 2, 10);
+	WaterBody water(2, 2, 30, skay);
 	water.setPosition(glm::vec3(0, -0.5f, 0));
 	water.setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)) * water.getRotation());
 	FrameBuffer frameBuffer(0, 0, 800, 600, true);
 	Sprite renderedToScreen(frameBuffer.getTexture());
 	model.setScale(glm::vec3(0.2f, 0.2f, 0.2f));
 	model.setPosition(glm::vec3(0, 0, -1));
-	water.setScale(glm::vec3(5, 5, 1));
+	water.setScale(glm::vec3(15, 15, 1));
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	float elapsedTime = 0;
 	float time = glfwGetTime();
@@ -505,7 +637,11 @@ int main()
 		//window.draw(sprite, spriteShaderProg);
 
 		window.draw(water, waterShader);
-
+		glDepthMask(GL_FALSE);
+		glDepthFunc(GL_LEQUAL);
+		window.draw(skay, skyboxShader);
+		glDepthMask(GL_TRUE);
+		glDepthFunc(GL_LESS);
 		frameBuffer.reset(800, 600);
 
 		window.setProjection(glm::ortho(-0.5f,0.5f,-0.5f,0.5f,0.01f,100.0f));
@@ -513,7 +649,6 @@ int main()
 		window.setView(glm::lookAt(glm::vec3(0, 0, 6), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
 		window.draw(renderedToScreen, postProcess);
 		window.setView(oldView);
-
 		window.swapBuffers();
 		time = currentFrame;
 	}

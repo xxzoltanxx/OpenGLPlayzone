@@ -52,6 +52,7 @@ unsigned int Model::loadTexture(const std::string& filename)
 	glBindTexture(GL_TEXTURE_2D, texID);
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
 	glGenerateMipmap(GL_TEXTURE_2D);
+	stbi_image_free(data);
 	textureCache.insert(std::make_pair(filename, texID));
 	return texID;
 }
@@ -216,6 +217,7 @@ Sprite::Sprite(const std::string& filename)
 		unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 0);
 
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		stbi_image_free(data);
 		glGenerateMipmap(GL_TEXTURE_2D);
 
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
