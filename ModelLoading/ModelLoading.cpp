@@ -193,11 +193,11 @@ const char* waterShaderVert = R"(
 
 	void main()
 	{
-		float z = sin(time * sin((thisPos.x + thisPos.y))) / 10.0f;
-		float zOne = sin(time * sin((one.x + one.y))) / 10.0f;
-		float zTwo = sin(time * sin((two.x + two.y))) / 10.0f;
+		float z = sin(time * sin((thisPos.x + thisPos.y))) / 5.0f;
+		float zOne = sin(time * sin((one.x + one.y))) / 5.0f;
+		float zTwo = sin(time * sin((two.x + two.y))) / 5.0f;
 		vec3 position = vec3(thisPos.x, thisPos.y, z);
-		vec3 crossed = cross(vec3(thisPos - one,zOne - z), vec3(thisPos - two,zTwo - z));
+		vec3 crossed = cross(vec3(one - thisPos,zOne - z), vec3(two - thisPos,zTwo - z));
 		normala = normalize(mat3(transpose(inverse(model))) * -crossed);
 		posOut = position;
 		gl_Position = projection * view * model * vec4(position,1.0f);
@@ -224,11 +224,11 @@ const char* waterShaderFrag = R"(
 
 	void main()
 	{
-		col = vec4(0.1,0.2,0.5,0.6f);
-		vec4 ambient = col * vec4(directionalLight.ambient, 0.6f);
+		col = vec4(0.1,0.5,0.5,1.0f);
+		vec4 ambient = col * vec4(directionalLight.ambient, 1.0f);
 		vec4 diffuse = vec4(max(dot(normala, -normalize(directionalLight.direction)),0.0) * col);
 		vec3 reflected = normalize(reflect(-directionalLight.direction, normala));
-		vec4 specular = vec4(pow(max(dot(reflected, normalize(viewPos - vec3((model * vec4(posOut, 1.0)).xyz))), 0.0), 256) * col);
+		vec4 specular = vec4(pow(max(dot(reflected, normalize(viewPos - vec3((model * vec4(posOut, 1.0)).xyz))), 0.0), 32) * col);
 		col = ambient + diffuse + specular;
 	}
 )";
@@ -464,7 +464,7 @@ void FrameBuffer::reset(int width, int height) const
 
 int main()
 {
-	Window window(800, 600, "OPENGL", false);
+	Window window(800, 600, "OPENGL");
 	Shader shader(vertexShaderS, fragmentShaderS);
 	Shader shader2(outlineShaderSVert, outlineShader);
 	Shader spriteShaderProg(spriteShader, spriteFragShader);
@@ -481,8 +481,13 @@ int main()
 	model.setPosition(glm::vec3(0, 0, -1));
 	water.setScale(glm::vec3(5, 5, 1));
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	float elapsedTime = 0;
+	float time = glfwGetTime();
 	while (!window.shouldClose())
 	{
+		float currentFrame = glfwGetTime();
+		elapsedTime = currentFrame - time;
+		window.processEvents(elapsedTime);
 		frameBuffer.use();
 		window.enableFaceCulling();
 		window.clear();
@@ -490,7 +495,6 @@ int main()
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
 		window.setProjection(glm::perspective(45.0f, (float)800 / 600, 0.1f, 100.0f));
-		window.setView(glm::lookAt(glm::vec3(2 * sin(glfwGetTime() * 0.2f), 1, 2 * cos(glfwGetTime() * 0.2f)), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
 		window.draw(model, shader);
 		glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
@@ -505,9 +509,12 @@ int main()
 		frameBuffer.reset(800, 600);
 
 		window.setProjection(glm::ortho(-0.5f,0.5f,-0.5f,0.5f,0.01f,100.0f));
+		glm::mat4 oldView = window.getView();
 		window.setView(glm::lookAt(glm::vec3(0, 0, 6), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
 		window.draw(renderedToScreen, postProcess);
+		window.setView(oldView);
 
 		window.swapBuffers();
+		time = currentFrame;
 	}
 }
