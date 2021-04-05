@@ -131,6 +131,37 @@ const char* spriteFragShader = R"(
 		}
 	}
 )";
+
+const char* fogShaderS = R"(
+	#version 330 core
+	in vec2 tex;
+	uniform sampler2D textureApply;
+	uniform sampler2D depthTexture;
+	
+	out vec4 col;
+
+	float LinearizeDepth(float depth, float near, float far) 
+	{
+		float z = depth * 2.0 - 1.0; // back to NDC 
+		return (2.0 * near * far) / (far + near - z * (far - near));	
+	}
+	void main()
+	{
+		float depth = texture(depthTexture, tex).r;
+		float linearized = LinearizeDepth(depth, 0.1f, 15.0f) / 15.0f;
+		float alpha = 1;
+		if (linearized > 0.9f)
+		{
+			alpha = 1 - (linearized - 0.9f) / 0.1f;
+		}
+		if (depth == 1)
+		{
+			alpha = 1;
+		}
+		col = mix(vec4(0.5f,0.2f,0.4f,alpha),texture(textureApply, tex), alpha);
+		col.a = alpha;
+	}
+)";
 const char* GaussianBlurShader = R"(
 	#version 330 core
 	in vec2 tex;
@@ -244,7 +275,7 @@ const char* cubemapVertS = R"(
 	{
 		TexCoord = pos;
 		vec4 ayy = projection * mat4(mat3(view)) * vec4(pos,1.0f);
-		gl_Position = ayy.xyww;
+		gl_Position = vec4(ayy.xyww);
 	}
 )";
 
@@ -258,6 +289,8 @@ const char* cubemapFragS = R"(
 		col = texture(skybox, TexCoord);
 	}
 )";
+
+
 
 struct WaterTriData
 {
@@ -448,6 +481,7 @@ public:
 	void use() const;
 	void reset(int width, int height) const;
 	unsigned int getTexture() const { return texture; }
+	unsigned int getDepthTexture() const { return depthTexture; }
 private:
 	unsigned int x;
 	unsigned int y;
@@ -455,6 +489,7 @@ private:
 	unsigned int height;
 	unsigned int fbo;
 	unsigned int texture;
+	unsigned int depthTexture;
 };
 
 FrameBuffer::FrameBuffer(int x, int y, int width, int height, bool depthStencil)
@@ -475,13 +510,15 @@ FrameBuffer::FrameBuffer(int x, int y, int width, int height, bool depthStencil)
 
 	if (depthStencil)
 	{
-		unsigned int rbo;
-		glGenRenderbuffers(1, &rbo);
-		glBindRenderbuffer(GL_RENDERBUFFER, rbo);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
+		glGenTextures(1, &depthTexture);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, depthTexture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, width, height, 0,GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 0);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, depthTexture, 0);
 	}
-
+	unsigned int a = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 	{
 		throw std::exception("Framebuffer incomplete!");
@@ -594,24 +631,25 @@ SkyBox::SkyBox(const std::vector<std::string>& faces)
 
 int main()
 {
-	Window window(800, 600, "OPENGL");
+	Window window(1980, 1080, "OPENGL", true, true);
 	Shader shader(vertexShaderS, fragmentShaderS);
 	Shader shader2(outlineShaderSVert, outlineShader);
 	Shader spriteShaderProg(spriteShader, spriteFragShader);
 	Shader postProcess(spriteShader, GaussianBlurShader);
 	Shader waterShader(waterShaderVert, waterShaderFrag);
 	Shader skyboxShader(cubemapVertS, cubemapFragS);
+	Shader fogShader(spriteShader, fogShaderS);
 	SkyBox skay(std::vector<std::string>{"right.png", "left.png", "top.png", "bottom.png", "front.png", "back.png"});
 	Model model("backpack.obj");
 	Sprite sprite("window.png");
 	WaterBody water(2, 2, 30, skay);
 	water.setPosition(glm::vec3(0, -0.5f, 0));
 	water.setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)) * water.getRotation());
-	FrameBuffer frameBuffer(0, 0, 800, 600, true);
+	FrameBuffer frameBuffer(0, 0, 1980, 1080, true);
 	Sprite renderedToScreen(frameBuffer.getTexture());
 	model.setScale(glm::vec3(0.2f, 0.2f, 0.2f));
 	model.setPosition(glm::vec3(0, 0, -1));
-	water.setScale(glm::vec3(15, 15, 1));
+	water.setScale(glm::vec3(30, 30, 1));
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	float elapsedTime = 0;
 	float time = glfwGetTime();
@@ -626,7 +664,7 @@ int main()
 		glStencilMask(0xFF);
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-		window.setProjection(glm::perspective(45.0f, (float)800 / 600, 0.1f, 100.0f));
+		window.setProjection(glm::perspective(45.0f, (float)1980 / 1080, 0.1f, 15.0f));
 		window.draw(model, shader);
 		glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
@@ -634,7 +672,7 @@ int main()
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 
 		window.disableFaceCulling();
-		//window.draw(sprite, spriteShaderProg);
+		window.draw(sprite, spriteShaderProg);
 
 		window.draw(water, waterShader);
 		glDepthMask(GL_FALSE);
@@ -642,12 +680,16 @@ int main()
 		window.draw(skay, skyboxShader);
 		glDepthMask(GL_TRUE);
 		glDepthFunc(GL_LESS);
-		frameBuffer.reset(800, 600);
+		frameBuffer.reset(1980, 1080);
 
 		window.setProjection(glm::ortho(-0.5f,0.5f,-0.5f,0.5f,0.01f,100.0f));
 		glm::mat4 oldView = window.getView();
 		window.setView(glm::lookAt(glm::vec3(0, 0, 6), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
-		window.draw(renderedToScreen, postProcess);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_2D, frameBuffer.getDepthTexture());
+		fogShader.use();
+		glUniform1i(glGetUniformLocation(fogShader.getID(), "depthTexture"), 1);
+		window.draw(renderedToScreen, fogShader);
 		window.setView(oldView);
 		window.swapBuffers();
 		time = currentFrame;
