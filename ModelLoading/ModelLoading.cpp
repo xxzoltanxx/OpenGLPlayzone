@@ -137,6 +137,7 @@ const char* fogShaderS = R"(
 	in vec2 tex;
 	uniform sampler2D textureApply;
 	uniform sampler2D depthTexture;
+	uniform sampler2D skyTexture;
 	
 	out vec4 col;
 
@@ -148,18 +149,31 @@ const char* fogShaderS = R"(
 	void main()
 	{
 		float depth = texture(depthTexture, tex).r;
-		float linearized = LinearizeDepth(depth, 0.1f, 15.0f) / 15.0f;
+		float linearized = LinearizeDepth(depth, 0.1f, 20.0f) / 20.0f;
+		float x = (tex.x - 0.5f) * 1.2f;
+		float y = (tex.y - 0.5f) * 1.2;
 		float alpha = 1;
-		if (linearized > 0.9f)
+		float zAyy = sqrt(1 - x * x);
+		if (linearized > zAyy * 0.9f)
 		{
-			alpha = 1 - (linearized - 0.9f) / 0.1f;
+			alpha = 1 - (linearized - zAyy * 0.9f) / (zAyy - zAyy * 0.9f);
+			if (linearized > zAyy)
+			{
+				alpha = -1;
+			}
 		}
 		if (depth == 1)
 		{
-			alpha = 1;
+			col = texture(skyTexture, tex);
 		}
-		col = mix(vec4(0.5f,0.2f,0.4f,alpha),texture(textureApply, tex), alpha);
-		col.a = alpha;
+		else if (alpha < 0)
+		{
+			col = texture(skyTexture, tex);
+		}
+		else
+		{
+			col = mix(texture(skyTexture, tex),texture(textureApply, tex), alpha);
+		}
 	}
 )";
 const char* GaussianBlurShader = R"(
@@ -224,9 +238,9 @@ const char* waterShaderVert = R"(
 
 	void main()
 	{
-		float z = sin(time * ((thisPos.x + thisPos.y))) / 5.0f;
-		float zOne = sin(time * ((one.x + one.y))) / 5.0f;
-		float zTwo = sin(time * ((two.x + two.y))) / 5.0f;
+		float z = sin(3 * time * ((thisPos.x + thisPos.y))) / 3.0f;
+		float zOne = sin(3 * time * ((one.x + one.y))) / 3.0f;
+		float zTwo = sin(3 * time * ((two.x + two.y))) / 3.0f;
 		vec3 position = vec3(thisPos.x, thisPos.y, z);
 		vec3 crossed = cross(vec3(one - thisPos,zOne - z), vec3(two - thisPos,zTwo - z));
 		normala = normalize(mat3(transpose(inverse(model))) * -crossed);
@@ -255,7 +269,7 @@ const char* waterShaderFrag = R"(
 
 	void main()
 	{
-		col = mix(vec4(0.1,0.5,0.5,1.0f),texture(cubeMap, reflect(normalize(viewPos - vec3(model * vec4(posOut, 1.0))), normala)), 0.7f);
+		col = mix(vec4(0.1,0.5,0.5,1.0f),texture(cubeMap, reflect(normalize(viewPos - vec3(model * vec4(posOut, 1.0))), normalize(normala))), 0.7f);
 		vec4 ambient = col * vec4(directionalLight.ambient, 1.0f);
 		vec4 diffuse = vec4(max(dot(normala, -normalize(directionalLight.direction)),0.0) * col);
 		vec3 reflected = normalize(reflect(-directionalLight.direction, normala));
@@ -647,9 +661,14 @@ int main()
 	water.setRotation(glm::angleAxis(glm::radians(90.0f), glm::vec3(1, 0, 0)) * water.getRotation());
 	FrameBuffer frameBuffer(0, 0, 1980, 1080, true);
 	Sprite renderedToScreen(frameBuffer.getTexture());
+	FrameBuffer skyBoxBuffer(0, 0, 1980, 1080, false);
+	stbi_set_flip_vertically_on_load(true);
+	Sprite ship("ship.png");
+	stbi_set_flip_vertically_on_load(false);
 	model.setScale(glm::vec3(0.2f, 0.2f, 0.2f));
 	model.setPosition(glm::vec3(0, 0, -1));
 	water.setScale(glm::vec3(30, 30, 1));
+	ship.setPosition(glm::vec3(1, 0, 1));
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	float elapsedTime = 0;
 	float time = glfwGetTime();
@@ -664,7 +683,7 @@ int main()
 		glStencilMask(0xFF);
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-		window.setProjection(glm::perspective(45.0f, (float)1980 / 1080, 0.1f, 15.0f));
+		window.setProjection(glm::perspective(45.0f, (float)1980 / 1080, 0.1f, 20.0f));
 		window.draw(model, shader);
 		glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
@@ -672,23 +691,27 @@ int main()
 		glStencilFunc(GL_ALWAYS, 1, 0xFF);
 
 		window.disableFaceCulling();
-		window.draw(sprite, spriteShaderProg);
-
+		window.draw(ship, spriteShaderProg);
 		window.draw(water, waterShader);
-		glDepthMask(GL_FALSE);
-		glDepthFunc(GL_LEQUAL);
-		window.draw(skay, skyboxShader);
-		glDepthMask(GL_TRUE);
-		glDepthFunc(GL_LESS);
+
+		window.draw(sprite, spriteShaderProg);
 		frameBuffer.reset(1980, 1080);
 
+		glDepthMask(GL_FALSE);
+		skyBoxBuffer.use();
+		window.draw(skay, skyboxShader);
+		skyBoxBuffer.reset(1980, 1080);
+		glDepthMask(GL_TRUE);
 		window.setProjection(glm::ortho(-0.5f,0.5f,-0.5f,0.5f,0.01f,100.0f));
 		glm::mat4 oldView = window.getView();
 		window.setView(glm::lookAt(glm::vec3(0, 0, 6), glm::vec3(0, 0, 0), glm::vec3(0, 1, 0)));
 		glActiveTexture(GL_TEXTURE1);
 		glBindTexture(GL_TEXTURE_2D, frameBuffer.getDepthTexture());
+		glActiveTexture(GL_TEXTURE2);
+		glBindTexture(GL_TEXTURE_2D, skyBoxBuffer.getTexture());
 		fogShader.use();
 		glUniform1i(glGetUniformLocation(fogShader.getID(), "depthTexture"), 1);
+		glUniform1i(glGetUniformLocation(fogShader.getID(), "skyTexture"), 2);
 		window.draw(renderedToScreen, fogShader);
 		window.setView(oldView);
 		window.swapBuffers();
